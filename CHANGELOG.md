@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] – Fork changes (on top of Tom Frankly’s 1.1.1)
+
+### Added
+- **Persistent logging**: `logs/whisper-writer.log` with rotation (2 MB, 3 backups). All important messages and errors are written there for post-crash debugging.
+- **`src/logger_config.py`**: Configures file logging, sanitizes long/binary messages, and installs an excepthook to log unhandled exceptions before exit.
+- **Windows launcher**: `launch-whisper-writer.bat` to start the app from its directory, with optional proxy bypass (uncomment lines for VPN workaround).
+- **Startup shortcut script**: `create-shortcut.ps1` to add a WhisperWriter shortcut to the Windows Startup folder (edit paths to match your install).
+- **API-only requirements**: `requirements-api-only.txt` for installs that use only API-based transcription and LLM (no local Whisper/Vosk).
+- **README**: “Changes in this fork” section (stability, launcher, VPN, Groq). VPN section translated to English.
+
+### Changed
+- **`run.py`**: Early setup of persistent logging; subprocess launch wrapped in try/except with logging of exit code and exceptions.
+- **`src/main.py`**: Calls `logger_config.setup_logging()` and `install_excepthook()` at startup.
+- **`src/result_thread.py`**: Replaced `traceback.print_exc()` with `logging.getLogger(__name__).exception(...)` so errors go to the log.
+- **`src/utils.py`**: Configuration and .env errors now logged via `logging` instead of `print`; `console_print` also writes to the persistent log.
+- **`.gitignore`**: Added `logs/` so log files are not committed.
+
+### Fixed
+- Crashes and API/configuration errors are now traceable via the log file when the console is closed or the app is started from the batch launcher.
+
 ## [1.1.1] - 2025-02-21
 
 All changes in this release are from [Thomas Frank's](https://github.com/TomFrankly) fork of the project.

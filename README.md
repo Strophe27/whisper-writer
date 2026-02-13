@@ -10,6 +10,28 @@ WhisperWriter is a speech-to-text app that lets you dictate and transcribe text,
 
 This version of the app started as a Windows-focused fork by [Thomas Frank](https://github.com/TomFrankly). The README below has been updated to include all of the changes and updates.
 
+### Changes in this fork
+
+This fork adds the following on top of Tom Frankly’s work:
+
+- **Stability and debugging**
+  - **Persistent logging**: All important messages and errors are written to `logs/whisper-writer.log` (rotating file, 2 MB). This makes it possible to debug crashes and API issues after the fact.
+  - **Unhandled exception logging**: A custom excepthook records any uncaught exception to the log before the app exits.
+  - **Replaced ad-hoc `print` with logging** in `run.py`, `main.py`, `result_thread.py`, and `utils.py`, so that configuration errors, API errors, and thread errors are always visible in the log even when the console is closed.
+
+- **Windows launcher and startup**
+  - **`launch-whisper-writer.bat`**: Batch script to start WhisperWriter from its directory. Optionally bypass system proxy (see VPN section below) by uncommenting the proxy-related lines.
+  - **`create-shortcut.ps1`**: PowerShell script to create a shortcut in the Windows Startup folder so WhisperWriter starts automatically at login. Edit the paths inside the script to match your install location.
+
+- **VPN / proxy workaround**
+  - If you use a VPN and want API calls (OpenAI, Deepgram, Groq, etc.) to use your normal IP, see the [VPN / Bypassing the VPN](#vpn--bypassing-the-vpn) section in Additional Notes. The launcher batch file supports optional proxy bypass.
+
+- **API-only install**
+  - **`requirements-api-only.txt`**: Dependency list for running with API-based transcription and LLM only (no local Whisper/Vosk). Useful for lighter installs when you rely on OpenAI, Deepgram, Groq, etc.
+
+- **Groq and other API providers**
+  - This fork is used with **Groq** for transcription and/or LLM. The app supports Groq natively (see Settings). The configurable **base URL** for the transcription API also allows other OpenAI-compatible endpoints if needed. LLM providers are selected via the existing list (OpenAI, Claude, Gemini, Groq, Ollama).
+
 ## Features
 
 WhisperWriter has three main "headliner" features:
@@ -258,6 +280,22 @@ If any of the configuration options are invalid or not provided, the program wil
 Check out the [CHANGELOG](CHANGELOG.md) for more details on what's been added and changed.
 
 ## Additional Notes
+
+### VPN / Bypassing the VPN
+
+If you use a VPN and want WhisperWriter to reach APIs (OpenAI, Deepgram, Groq, etc.) with your **normal IP** (without going through the VPN tunnel):
+
+1. **Split tunneling (recommended)**  
+   In your VPN client settings, enable “split tunneling” and **exclude** the app from the tunnel:
+   - Either add **Python** to the excluded applications list (e.g. `python.exe` or the path to `venv\Scripts\python.exe`).
+   - Or add the **launcher or script** that starts WhisperWriter (e.g. `launch-whisper-writer.bat` or the path to `run.py`), if your VPN allows excluding executables by path.
+
+   Each VPN handles this differently (NordVPN, ExpressVPN, Mullvad, etc.); check your VPN’s docs for “split tunneling” or “app / application exclusion”.
+
+2. **If your VPN uses a system proxy**  
+   You can make WhisperWriter ignore the proxy for that session by uncommenting the “Bypass proxy” lines in `launch-whisper-writer.bat`. The app will then use your direct connection (usually your normal IP).
+
+The app cannot “turn off” the VPN by itself; bypassing is done either via the VPN client (split tunneling) or by disabling the proxy for this program.
 
 ### Find and Replace
 
