@@ -1,6 +1,12 @@
 import os
 import sys
 import time
+
+# Logging persistant et capture des exceptions non gérées
+from logger_config import setup_logging, install_excepthook
+setup_logging()
+install_excepthook()
+
 from audioplayer import AudioPlayer
 from pynput.keyboard import Controller, Key
 from PyQt5.QtCore import QObject, QProcess

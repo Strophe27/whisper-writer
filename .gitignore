@@ -57,7 +57,11 @@ coverage.xml
 
 # Django stuff:
 *.log
+logs/
 local_settings.py
+
+# Local config (may contain API keys – do not commit)
+src/config.json
 db.sqlite3
 db.sqlite3-journal
 

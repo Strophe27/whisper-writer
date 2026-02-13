@@ -1,5 +1,6 @@
 import yaml
 import os
+import logging
 
 class ConfigManager:
     _instance = None
@@ -119,7 +120,7 @@ class ConfigManager:
                     user_config = yaml.safe_load(file)
                     deep_update(self.config, user_config)
             except yaml.YAMLError:
-                print("Error in configuration file. Using default configuration.")
+                logging.getLogger(__name__).warning("Error in configuration file. Using default configuration.")
 
     @classmethod
     def save_config(cls, config_path=os.path.join('src', 'config.yaml')):
@@ -147,7 +148,11 @@ class ConfigManager:
 
     @classmethod
     def console_print(cls, message):
-        """Print a message to the console if enabled in the configuration."""
+        """Print a message to the console if enabled in the configuration, et écrit toujours dans le log persistant."""
+        try:
+            logging.getLogger().info("%s", message)
+        except Exception:
+            pass
         if cls._instance and cls._instance.config['misc']['print_to_terminal']:
             print(message)
 
@@ -162,4 +167,4 @@ class ConfigManager:
                             key, value = line.strip().split('=', 1)
                             os.environ[key] = value.strip('"').strip("'")
             except Exception as e:
-                print(f"Error loading .env file: {e}")
+                logging.getLogger(__name__).warning("Error loading .env file: %s", e)

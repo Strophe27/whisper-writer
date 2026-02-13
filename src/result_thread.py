@@ -1,5 +1,5 @@
 import time
-import traceback
+import logging
 import numpy as np
 import sounddevice as sd
 import tempfile
@@ -120,7 +120,7 @@ class ResultThread(QThread):
 
         except Exception as e:
             ConfigManager.console_print(f"Error in ResultThread: {str(e)}")
-            traceback.print_exc()
+            logging.getLogger(__name__).exception("Error in ResultThread")
             self.statusSignal.emit('error', self.use_llm)
             self.resultSignal.emit('')
         finally:

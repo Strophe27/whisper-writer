@@ -5,6 +5,14 @@ import subprocess
 from dotenv import load_dotenv
 import glob
 
+# Logging persistant : initialiser au plus tôt pour capturer erreurs et traces
+sys.path.insert(0, os.path.join(os.getcwd(), "src"))
+from logger_config import setup_logging, get_log_path
+setup_logging()
+
+import logging
+log = logging.getLogger("run")
+
 def set_cuda_paths():
     """Set up CUDA paths for GPU support."""
     try:
@@ -82,6 +90,13 @@ def check_bundled_cuda():
 # Set CUDA paths before anything else
 set_cuda_paths()
 
-print('Starting WhisperWriter...')
+log.info("Starting WhisperWriter... (log: %s)", get_log_path())
+print("Starting WhisperWriter...")
 load_dotenv()
-subprocess.run([sys.executable, os.path.join('src', 'main.py')])
+try:
+    result = subprocess.run([sys.executable, os.path.join("src", "main.py")])
+    if result.returncode != 0:
+        log.warning("Processus principal terminé avec le code de sortie: %s", result.returncode)
+except Exception as e:
+    log.exception("Erreur au lancement de l'application: %s", e)
+    raise
