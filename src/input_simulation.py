@@ -6,6 +6,15 @@ import win32clipboard
 import win32con
 from pynput.keyboard import Controller as PynputController, Key
 
+
+def _set_clipboard_text_unicode(text):
+    """Met le texte dans le presse-papiers en Unicode (évite UnicodeEncodeError avec MBCS)."""
+    # CF_UNICODETEXT = UTF-16 LE, null-terminated
+    win32clipboard.SetClipboardData(
+        win32con.CF_UNICODETEXT,
+        text.encode("utf-16-le") + b"\x00\x00",
+    )
+
 from utils import ConfigManager
 
 def run_command_or_exit_on_failure(command):
@@ -100,9 +109,9 @@ class InputSimulator:
                     pass  # Skip formats we can't handle
                 format_id = win32clipboard.EnumClipboardFormats(format_id)
                 
-            # Clear clipboard and set our text
+            # Clear clipboard and set our text (Unicode pour éviter crash sur caractères spéciaux)
             win32clipboard.EmptyClipboard()
-            win32clipboard.SetClipboardText(text)
+            _set_clipboard_text_unicode(text)
             win32clipboard.CloseClipboard()
             
             # Simulate Ctrl+V

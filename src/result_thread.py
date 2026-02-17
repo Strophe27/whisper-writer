@@ -32,17 +32,20 @@ class ResultThread(QThread):
 
     statusSignal = pyqtSignal(str, bool)
     resultSignal = pyqtSignal(str)
+    last_audio_signal = pyqtSignal(object)
 
-    def __init__(self, local_model=None, use_llm=False):
+    def __init__(self, local_model=None, use_llm=False, initial_audio=None):
         """
         Initialize the ResultThread.
 
         :param local_model: Local transcription model (if applicable)
         :param use_llm: Boolean indicating whether to use LLM mode
+        :param initial_audio: Optional numpy array to re-transcribe instead of recording (double-tap resend)
         """
         super().__init__()
         self.local_model = local_model
         self.use_llm = use_llm
+        self.initial_audio = initial_audio
         self.is_recording = False
         self.is_running = True
         self.sample_rate = None
@@ -72,29 +75,41 @@ class ResultThread(QThread):
             if not self.is_running:
                 return
 
-            # Only control media if the setting is enabled
-            if ConfigManager.get_config_value('misc', 'pause_media_during_recording'):
-                self.media_controller.pause_media()
-                self.media_controller.was_playing = True
+            if self.initial_audio is not None:
+                # Re-send path: no recording, just re-transcribe last audio
+                audio_data = self.initial_audio
+                self.last_audio_signal.emit(audio_data)
+                self.is_transcribing = True
+                self.statusSignal.emit('resending', self.use_llm)
+                ConfigManager.console_print('Re-sending last audio for transcription...')
+            else:
+                # Normal path: record then transcribe
+                if ConfigManager.get_config_value('misc', 'pause_media_during_recording'):
+                    self.media_controller.pause_media()
+                    self.media_controller.was_playing = True
 
-            self.mutex.lock()
-            self.is_recording = True
-            self.mutex.unlock()
+                self.mutex.lock()
+                self.is_recording = True
+                self.mutex.unlock()
 
-            self.statusSignal.emit('recording', self.use_llm)
-            ConfigManager.console_print('Recording...')
-            audio_data = self._record_audio()
+                self.statusSignal.emit('recording', self.use_llm)
+                ConfigManager.console_print('Recording...')
+                audio_data = self._record_audio()
+
+                if not self.is_running:
+                    return
+
+                if audio_data is None or len(audio_data) == 0:
+                    self.statusSignal.emit('idle', self.use_llm)
+                    return
+
+                self.last_audio_signal.emit(audio_data)
+                self.is_transcribing = True  # Set transcribing flag
+                self.statusSignal.emit('transcribing', self.use_llm)
+                ConfigManager.console_print('Transcribing...')
 
             if not self.is_running:
                 return
-
-            if audio_data is None or len(audio_data) == 0:
-                self.statusSignal.emit('idle', self.use_llm)
-                return
-
-            self.is_transcribing = True  # Set transcribing flag
-            self.statusSignal.emit('transcribing', self.use_llm)
-            ConfigManager.console_print('Transcribing...')
 
             # Time the transcription process
             start_time = time.time()
@@ -108,14 +123,16 @@ class ResultThread(QThread):
                 return
 
             self.statusSignal.emit('idle', self.use_llm)
+            # Keep last_audio available for unlimited re-sends (normal or resend)
+            self.last_audio_signal.emit(audio_data)
             self.resultSignal.emit(result)
 
             # Reset transcribing flag and update last_audio_time after successful transcription
             self.is_transcribing = False
             self.last_audio_time = time.time()
 
-            # Only resume media if the setting is enabled
-            if ConfigManager.get_config_value('misc', 'pause_media_during_recording'):
+            # Only resume media if we paused it (normal recording path)
+            if self.initial_audio is None and ConfigManager.get_config_value('misc', 'pause_media_during_recording'):
                 self.media_controller.resume_media()
 
         except Exception as e:

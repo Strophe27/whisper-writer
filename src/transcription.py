@@ -1,5 +1,6 @@
 import io
 import os
+import unicodedata
 import numpy as np
 import soundfile as sf
 import importlib.util
@@ -11,6 +12,48 @@ from openai import OpenAI
 from groq import Groq
 
 from utils import ConfigManager
+
+# Caractères Unicode considérés "normaux" pour transcription FR/EN (Latin + ponctuation)
+def _is_reasonable_char(c):
+    """True si le caractère est attendu dans une transcription FR/EN (Latin, chiffres, ponctuation)."""
+    cp = ord(c)
+    if c == '\uFFFD':  # replacement character = erreur décodage / hallucination
+        return False
+    cat = unicodedata.category(c)
+    if cat == 'Zs' or cat == 'Cf':  # space, format
+        return True
+    if cat == 'Nd' or cat == 'No':  # digit
+        return True
+    if cat == 'Pc' or cat == 'Pd' or cat == 'Ps' or cat == 'Pe' or cat == 'Pi' or cat == 'Pf' or cat == 'Po':  # punctuation
+        return True
+    if cat.startswith('L'):  # letter
+        # Latin (basic + extended A/B), espaces insécables, apostrophe typographique
+        if cp <= 0x024F:  # Latin Extended B
+            return True
+        if 0x1E00 <= cp <= 0x1EFF:  # Latin Extended Additional
+            return True
+        # Tout autre script (Greek, Cyrillic, etc.) dans une phrase FR/EN = suspect
+        return False
+    return False
+
+
+def is_transcription_garbage(text, language=None):
+    """
+    Détecte si la transcription ressemble à du retour "WTF" (scripts mélangés, caractères de remplacement).
+    Retourne True si on devrait réessayer avec un autre provider.
+    """
+    if not text or not text.strip():
+        return False
+    text = text.strip()
+    n = len(text)
+    reasonable = sum(1 for c in text if _is_reasonable_char(c))
+    ratio = reasonable / n if n else 1.0
+    # Trop de caractères bizarres (ex. Greek/Cyrillic mélangés au Latin)
+    if ratio < 0.85:
+        return True
+    if '\uFFFD' in text:
+        return True
+    return False
 from keyring_manager import KeyringManager
 from text_processor import TextProcessor
 
@@ -267,24 +310,44 @@ def transcribe_local(audio_data, local_model=None):
         )
         return ''.join([segment.text for segment in list(response[0])])
 
-def transcribe_api(audio_data):
-    """Transcribe audio using an API service (OpenAI, Deepgram, or Groq)."""
-    api_options = ConfigManager.get_config_section('model_options')['api']
-    provider = api_options['provider']
-    model = api_options['model']
-    
-    ConfigManager.console_print(f"\n=== Using {provider.upper()} API Service ===")
-    ConfigManager.console_print(f"Selected model: {model}")
-    
+def _transcribe_with_provider(audio_data, api_options, provider):
+    """Appel direct à un provider (openai, deepgram, groq)."""
     if provider == 'openai':
         return transcribe_with_openai(audio_data, api_options)
     elif provider == 'deepgram':
         return transcribe_with_deepgram(audio_data, api_options)
     elif provider == 'groq':
         return transcribe_with_groq(audio_data, api_options)
-    else:
-        ConfigManager.console_print(f"Unknown API provider: {provider}")
-        return ''
+    return ''
+
+
+def transcribe_api(audio_data):
+    """Transcribe audio using an API service (OpenAI, Deepgram, or Groq), avec fallback si retour garbage."""
+    api_options = ConfigManager.get_config_section('model_options')['api']
+    provider = api_options['provider']
+    model = api_options['model']
+    fallback = (api_options.get('fallback_provider') or '').strip() or None
+    garbage_check = api_options.get('garbage_check_enabled', True)
+    language = ConfigManager.get_config_value('model_options', 'common', 'language')
+
+    ConfigManager.console_print(f"\n=== Using {provider.upper()} API Service ===")
+    ConfigManager.console_print(f"Selected model: {model}")
+
+    result = _transcribe_with_provider(audio_data, api_options, provider)
+    if not result:
+        return result
+
+    if fallback and fallback != provider and garbage_check and is_transcription_garbage(result, language):
+        ConfigManager.console_print(
+            f"Transcription from {provider.upper()} looks garbled (weird characters). Retrying with {fallback.upper()}..."
+        )
+        fallback_result = _transcribe_with_provider(audio_data, api_options, fallback)
+        if fallback_result:
+            ConfigManager.console_print(f"Using {fallback.upper()} result as fallback.")
+            return fallback_result
+        ConfigManager.console_print("Fallback failed or empty, keeping original result.")
+
+    return result
 
 def transcribe_with_openai(audio_data, api_options):
     """Transcribe audio using OpenAI's Whisper API."""
@@ -306,12 +369,19 @@ def transcribe_with_openai(audio_data, api_options):
         byte_io = io.BytesIO()
         sf.write(byte_io, audio_data, 16000, format='wav')
         byte_io.seek(0)
-        
+
+        language = ConfigManager.get_config_value('model_options', 'common', 'language')
+        initial_prompt = ConfigManager.get_config_value('model_options', 'common', 'initial_prompt')
+
         files = {
             'file': ('audio.wav', byte_io, 'audio/wav'),
-            'model': (None, 'whisper-1'),
+            'model': (None, api_options.get('model', 'whisper-1')),
         }
-        
+        if language:
+            files['language'] = (None, language)
+        if initial_prompt:
+            files['prompt'] = (None, initial_prompt)
+
         ConfigManager.console_print("Sending request to OpenAI API...")
         response = requests.post(
             f"{base_url}/audio/transcriptions",

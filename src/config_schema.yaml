@@ -18,7 +18,7 @@ model_options:
     initial_prompt:
       value: null
       type: str
-      description: "A string used as an initial prompt to condition the transcription. More info: https://platform.openai.com/docs/guides/speech-to-text/prompting"
+      description: "Prompt pour conditionner la transcription (style et orthographe). Whisper suit le STYLE du texte, pas des instructions. Limite ~224 tokens (~900 car.). Exemple FR + IA/tech (à copier si besoin) : « Transcription en français. Domaine IA et tech. Termes en anglais : prompt, pipeline, embedding, token, fine-tuning, dataset, API, backend, frontend, machine learning, transformer, GPU, inference, workflow, GitHub, Python, JSON. » Plus d'infos : https://platform.openai.com/docs/guides/speech-to-text/prompting. Laisser vide ou null pour désactiver."
 
   # Configuration options for the OpenAI API
   api:
@@ -57,6 +57,19 @@ model_options:
       value: https://api.openai.com/v1
       type: str
       description: "Used only if OpenAI is the selected provider. The base URL for the API. Can be changed to use a local API endpoint."
+    fallback_provider:
+      value: ""
+      type: str
+      description: "If the primary provider (e.g. Groq) returns garbled/weird characters, retry with this provider. Leave empty to disable."
+      options:
+        - ""
+        - openai
+        - deepgram
+        - groq
+    garbage_check_enabled:
+      value: true
+      type: bool
+      description: "When a fallback provider is set, detect suspicious transcriptions (mixed scripts, replacement chars) and retry with fallback."
 
   # Configuration options for the faster-whisper model
   local:
@@ -121,6 +134,14 @@ recording_options:
     value: ctrl+shift+space
     type: str
     description: "The keyboard shortcut to activate the recording and transcribing process. Separate keys with a '+'."
+  enable_double_tap_resend:
+    value: true
+    type: boolean
+    description: "If true, double-tapping the activation key within the delay below re-sends the last recorded audio for transcription (useful when the API returned garbage)."
+  double_tap_resend_ms:
+    value: 400
+    type: int
+    description: "Max delay in milliseconds between two taps to count as double-tap for re-send. Single tap starts recording after this delay."
   llm_cleanup_key:
     value: null
     type: str

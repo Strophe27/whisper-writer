@@ -197,6 +197,12 @@ class StatusWindow(BaseWindow):
             self.icon_label.setPixmap(self.pencil_pixmap)
             self.status_label.setText('Transcribing...')
             self.shortcuts_label.hide()
+
+        elif status == 'resending':
+            self.icon_label.setPixmap(self.pencil_pixmap)
+            self.status_label.setText('Ré-envoi…')
+            self.shortcuts_label.hide()
+            self.show()
             
         elif status == 'processing_llm_cleanup':
             self.icon_label.setPixmap(self.pencil_pixmap)

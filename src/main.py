@@ -9,7 +9,7 @@ install_excepthook()
 
 from audioplayer import AudioPlayer
 from pynput.keyboard import Controller, Key
-from PyQt5.QtCore import QObject, QProcess
+from PyQt5.QtCore import QObject, QProcess, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction, QMessageBox, QLineEdit
 import win32clipboard
@@ -21,12 +21,14 @@ from ui.main_window import MainWindow
 from ui.settings_window import SettingsWindow
 from ui.status_window import StatusWindow
 from transcription import create_local_model
-from input_simulation import InputSimulator
+from input_simulation import InputSimulator, _set_clipboard_text_unicode
 from utils import ConfigManager
 from llm_processor import LLMProcessor
 
 
 class WhisperWriterApp(QObject):
+    activationRequested = pyqtSignal(bool, bool)
+
     def __init__(self):
         """
         Initialize the application, opening settings window if no configuration file is found.
@@ -70,6 +72,14 @@ class WhisperWriterApp(QObject):
 
         self.result_thread = None
         self.llm_processor = LLMProcessor() if ConfigManager.get_config_value('llm_post_processing', 'enabled') else None
+
+        self.last_audio = None
+        self._last_activation_time = 0
+        self._activation_timer = QTimer(self)
+        self._activation_timer.setSingleShot(True)
+        self._activation_timer.timeout.connect(self._on_activation_timer_fired)
+
+        self.activationRequested.connect(self._on_activation_requested)
 
         if not ConfigManager.get_config_value('misc', 'hide_status_window'):
             self.status_window = StatusWindow()
@@ -128,10 +138,14 @@ class WhisperWriterApp(QObject):
 
     def on_activation(self, use_llm=False, is_instruction_mode=False):
         """
-        Called when the activation key combination is pressed.
-        Args:
-            use_llm (bool): Whether to use LLM processing for this activation
-            is_instruction_mode (bool): Whether to use instruction mode for LLM processing
+        Called from the key listener thread when the activation key is pressed.
+        Emit signal so the actual logic runs in the main Qt thread.
+        """
+        self.activationRequested.emit(use_llm, is_instruction_mode)
+
+    def _on_activation_requested(self, use_llm=False, is_instruction_mode=False):
+        """
+        Runs in the main Qt thread. Double-tap within double_tap_resend_ms triggers re-send of last audio.
         """
         if self.result_thread and self.result_thread.isRunning():
             recording_mode = ConfigManager.get_config_value('recording_options', 'recording_mode')
@@ -140,11 +154,34 @@ class WhisperWriterApp(QObject):
             elif recording_mode == 'continuous':
                 self.stop_result_thread()
             return
-        
-        # If we get here, no thread is running, so start one
+
+        enable_double_tap = ConfigManager.get_config_value('recording_options', 'enable_double_tap_resend')
+        double_tap_ms = ConfigManager.get_config_value('recording_options', 'double_tap_resend_ms') or 400
+        # When last_audio exists, use longer window so 2nd tap is processed before we start recording
+        delay_ms = max(600, int(double_tap_ms * 1.5)) if self.last_audio is not None else double_tap_ms
+        now = time.time()
+        is_second_tap = (
+            enable_double_tap
+            and self.last_audio is not None
+            and (now - self._last_activation_time) < (delay_ms / 1000.0)
+        )
+
+        if is_second_tap:
+            self._activation_timer.stop()
+            self._last_activation_time = now
+            self.use_llm = use_llm
+            self.is_instruction_mode = is_instruction_mode
+            self.start_result_thread(initial_audio=self.last_audio)
+            return
+
+        self._last_activation_time = now
         self.use_llm = use_llm
         self.is_instruction_mode = is_instruction_mode
-        self.start_result_thread()
+
+        if enable_double_tap:
+            self._activation_timer.start(delay_ms)
+        else:
+            self.start_result_thread()
 
     def on_activation_with_llm_cleanup(self):
         """Activation with LLM cleanup based on recording mode"""
@@ -191,18 +228,30 @@ class WhisperWriterApp(QObject):
         ConfigManager.console_print("LLM instruction deactivation triggered")
         self.on_deactivation(use_llm=True, is_instruction_mode=True)
 
-    def start_result_thread(self):
+    def _on_activation_timer_fired(self):
+        """Called when double-tap window expires: start normal recording."""
+        if self.result_thread and self.result_thread.isRunning():
+            return
+        self.start_result_thread()
+
+    def _on_last_audio(self, audio_data):
+        """Store last audio for re-send (double-tap). Kept after each transcription so re-send can be used multiple times."""
+        self.last_audio = audio_data
+
+    def start_result_thread(self, initial_audio=None):
         """
         Start the result thread to record audio and transcribe it.
+        If initial_audio is provided, re-transcribe that audio instead of recording (double-tap resend).
         """
         if self.result_thread and self.result_thread.isRunning():
             return
 
-        self.result_thread = ResultThread(self.local_model, self.use_llm)
+        self.result_thread = ResultThread(self.local_model, self.use_llm, initial_audio=initial_audio)
         if not ConfigManager.get_config_value('misc', 'hide_status_window'):
             self.result_thread.statusSignal.connect(self.status_window.updateStatus)
             self.status_window.closeSignal.connect(self.stop_result_thread)
         self.result_thread.resultSignal.connect(self.on_transcription_complete)
+        self.result_thread.last_audio_signal.connect(self._on_last_audio)
         self.result_thread.start()
 
     def stop_result_thread(self):
@@ -271,8 +320,15 @@ class WhisperWriterApp(QObject):
                     ConfigManager.console_print(f"Error processing text through LLM: {str(e)}")
                     return result
 
-            # Type the result
-            self.input_simulator.typewrite(result)
+            # Type the result (protégé contre erreurs Unicode / clipboard)
+            try:
+                self.input_simulator.typewrite(result)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "Impossible d’écrire la transcription (caractères non pris en charge ou erreur presse-papiers): %s", e
+                )
+                ConfigManager.console_print(f"Erreur lors de l’écriture du texte: {e}")
             
             if ConfigManager.get_config_value('misc', 'noise_on_completion'):
                 AudioPlayer(os.path.join('assets', 'beep.wav')).play(block=True)
@@ -355,10 +411,10 @@ class WhisperWriterApp(QObject):
                     # Simulate keyboard events with proper cleanup
                     keyboard = Controller()
                     
-                    # First set the cleaned text to clipboard
+                    # First set the cleaned text to clipboard (Unicode pour éviter crash sur caractères spéciaux)
                     win32clipboard.OpenClipboard()
                     win32clipboard.EmptyClipboard()
-                    win32clipboard.SetClipboardText(cleaned_text)
+                    _set_clipboard_text_unicode(cleaned_text)
                     win32clipboard.CloseClipboard()
                     
                     try:
